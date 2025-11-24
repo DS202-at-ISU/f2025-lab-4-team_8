@@ -1,0 +1,206 @@
+
+---
+title: "Lab #4: Scraping (into) the Hall of Fame"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Maurycy's Work
+## Loading packages
+
+```{r}
+library(rvest)
+library(dplyr)
+library(readr)
+library(Lahman)
+library(ggplot2)
+```
+
+## First, let's see what we're trying to match
+
+```{r}
+# Looking at the HallOfFame data to see what format we need
+head(HallOfFame, 5)
+```
+
+## Scraping the 2025 data
+
+```{r}
+# Getting the webpage
+url <- "https://www.baseball-reference.com/awards/hof_2025.shtml"
+page <- read_html(url)
+
+# Grabbing the tables
+tables <- html_table(page)
+data <- tables[[1]]
+
+# Quick look at what we got
+head(data)
+```
+
+## Fixing the column names
+
+The first row has the real column names, so let's fix that:
+
+```{r}
+# Moving first row to be the column names
+colnames(data) <- data[1, ]
+data <- data[-1, ]
+
+head(data)
+```
+
+## Getting the important stuff
+
+```{r}
+# Pulling out just the columns we need
+voting_data <- data %>%
+  select(Name, Votes, `%vote`) %>%
+  mutate(
+    Votes = as.numeric(Votes),
+    percent = parse_number(`%vote`)
+  )
+
+head(voting_data)
+```
+
+## Figuring out who got inducted
+
+```{r}
+# Finding total ballots and votes needed
+# The top person's percentage tells us the total
+top_votes <- max(voting_data$Votes, na.rm = TRUE)
+top_percent <- max(voting_data$percent, na.rm = TRUE)
+
+total_ballots <- round(top_votes / (top_percent / 100))
+votes_needed <- ceiling(total_ballots * 0.75)
+
+cat("Total ballots:", total_ballots, "\n")
+cat("Votes needed to get in:", votes_needed, "\n")
+
+# Adding inducted column
+voting_data <- voting_data %>%
+  mutate(inducted = ifelse(Votes >= votes_needed, "Y", "N"))
+
+# Who got in?
+voting_data %>% 
+  filter(inducted == "Y") %>%
+  select(Name, Votes, percent)
+```
+
+## Matching names to playerIDs
+
+This is the tricky part - we need to find the playerID for each person:
+
+```{r}
+# Loading player info
+data(People)
+
+# Making a simple function to find IDs
+get_playerID <- function(name) {
+  # Cleaning up the name
+  name <- gsub("\\*|†", "", name)
+  name <- trimws(name)
+  
+  # Splitting into first and last name
+  parts <- strsplit(name, " ")[[1]]
+  
+  if(length(parts) >= 2) {
+    first <- parts[1]
+    last <- parts[length(parts)]
+    
+    # Looking for matches in the People table
+    match <- People %>%
+      filter(tolower(nameFirst) == tolower(first),
+             tolower(nameLast) == tolower(last))
+    
+    if(nrow(match) > 0) {
+      return(match$playerID[1])
+    }
+  }
+  return(NA)
+}
+
+# Getting IDs for everyone
+voting_data$playerID <- sapply(voting_data$Name, get_playerID)
+
+# Check if anyone didn't match
+missing <- voting_data %>% filter(is.na(playerID))
+if(nrow(missing) > 0) {
+  cat("Couldn't find IDs for:", missing$Name, "\n")
+}
+```
+
+## Making the final dataset
+
+```{r}
+# Creating the dataset in the same format as HallOfFame
+HallOfFame_2025 <- data.frame(
+  playerID = voting_data$playerID,
+  yearID = 2025,
+  votedBy = "BBWAA",
+  ballots = total_ballots,
+  needed = votes_needed,
+  votes = voting_data$Votes,
+  inducted = voting_data$inducted,
+  category = "Player",
+  needed_note = NA
+)
+
+# Removing anyone without a playerID
+HallOfFame_2025 <- HallOfFame_2025 %>% filter(!is.na(playerID))
+
+head(HallOfFame_2025, 10)
+```
+
+## Checking if it matches Lahman
+
+```{r}
+# Seeing if 2025 data is already in the Lahman database
+lahman_2025 <- HallOfFame %>% filter(yearID == 2025)
+
+if(nrow(lahman_2025) > 0) {
+  cat("Found 2025 data in Lahman - comparing now...\n")
+  cat("Lahman has", nrow(lahman_2025), "records\n")
+  cat("I scraped", nrow(HallOfFame_2025), "records\n")
+} else {
+  cat("No 2025 data in Lahman yet\n")
+}
+```
+
+## Saving the data
+
+```{r}
+write_csv(HallOfFame_2025, "HallOfFame_2025.csv")
+cat("Saved to HallOfFame_2025.csv\n")
+cat("Inducted:", sum(HallOfFame_2025$inducted == "Y"), "\n")
+cat("Not inducted:", sum(HallOfFame_2025$inducted == "N"), "\n")
+```
+
+## Making the plot
+
+```{r}
+HallOfFame %>%
+  ggplot(aes(x = yearID, fill = inducted)) +
+  geom_bar() +
+  xlim(c(1936, 2025)) +
+  labs(title = "Hall of Fame Voting Over Time",
+       x = "Year",
+       y = "Count") +
+  theme_minimal()
+```
+
+## My notes
+
+**What worked:**
+The scraping part was pretty straightforward once I figured out rvest. parse_number was really helpful for getting rid of the % signs. Matching the column names from the first row was easier than I thought
+
+**What was tricky:**
+Getting the playerIDs to match was annoying - some names just wouldn't work. Had to remember to convert everything to numeric or it stayed as text. Making sure the inducted column was Y/N and not TRUE/FALSE
+
+**Questions for my team:**
+Did everyone get the same number of total ballots? Anyone have a better way to match the playerIDs?
