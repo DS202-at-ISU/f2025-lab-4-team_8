@@ -1,0 +1,119 @@
+---
+title: 'Lab #4: Scraping (into) the Hall of Fame'
+author: "Arina Kharitonova"
+date: "2025-11-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rvest)
+library(readr)
+library(Lahman)
+library(ggplot2)
+```
+
+# Inspecting Hall of Fame Format
+```{r}
+library(Lahman)
+data(HallOfFame)
+head(HallOfFame, 3)
+str(HallOfFame)
+```
+
+# Scraping the 2025 Hall of Fame Data
+```{r}
+url <- "https://www.baseball-reference.com/awards/hof_2025.shtml"
+page <- read_html(url)
+tables <- html_table(page, fill = TRUE)
+
+data_2025 <- tables[[1]]
+head(data_2025, 3)
+colnames(data_2025)
+```
+
+# Fixing Column Names in the 2025 Hall of Fame Data
+```{r}
+actual_col_names <- data_2025[1, ]
+colnames(data_2025) <- actual_col_names
+data_2025 <- data_2025[-1, ]
+
+head(data_2025, 3)
+colnames(data_2025)
+```
+
+# Extracting Voting Columns
+```{r}
+voting_data <- data_2025 %>%
+  select(Name, Votes, `%vote`) %>%
+  mutate(
+    Votes = as.numeric(Votes),
+    percent = readr::parse_number(`%vote`)
+  )
+
+head(voting_data)
+
+```
+
+# Calculating Total Ballots and Votes Needed
+```{r}
+top_votes <- max(voting_data$Votes, na.rm = TRUE)
+top_percent <- max(voting_data$percent, na.rm = TRUE)
+
+total_ballots <- round(top_votes / (top_percent / 100))
+votes_needed <- ceiling(total_ballots * 0.75)
+
+total_ballots
+votes_needed
+
+```
+
+# Determining Inducted Players for 2025
+```{r}
+voting_data <- voting_data %>%
+mutate(inducted = if_else(Votes >= votes_needed, "Y", "N"))
+
+voting_data %>% filter(inducted == "Y")
+
+```
+
+# Creating the Final HallOfFame_2025 Table
+```{r}
+HallOfFame_2025 <- voting_data %>%
+mutate(
+playerID = NA_character_,
+yearID = 2025L,
+votedBy = "BBWAA",
+ballots = total_ballots,
+needed = votes_needed,
+votes = Votes,
+category = "Player",
+needed_note = NA_character_
+) %>%
+select(
+playerID, yearID, votedBy, ballots, needed, votes,
+inducted, category, needed_note
+)
+
+head(HallOfFame_2025)
+
+```
+
+# Saving HallOfFame_2025 as a CSV File
+```{r}
+write_csv(HallOfFame_2025, "HallOfFame_2025.csv")
+
+```
+
+# Plotting Hall of Fame Inductions Including 2025
+```{r}
+HallOfFame %>%
+filter(yearID < 2025) %>%
+bind_rows(HallOfFame_2025) %>%
+ggplot(aes(x = yearID, fill = inducted)) +
+geom_bar() +
+xlim(c(1936, 2025))
+
+```
+
